@@ -16,6 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { ToolWithCategory, CompatibilityMatrix as CompatibilityMatrixType } from "@shared/schema";
+import { EditToolDialog } from "@/components/edit-tool-dialog";
 
 interface CompatibilityMatrixPageProps {
   searchQuery: string;
@@ -32,6 +33,8 @@ export default function CompatibilityMatrixPage({ searchQuery }: CompatibilityMa
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [useQualityFilter, setUseQualityFilter] = useState(true);
   const [generatingCompatibilities, setGeneratingCompatibilities] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingTool, setEditingTool] = useState<ToolWithCategory | null>(null);
 
   const { data: allTools = [], refetch: refetchTools } = useQuery<ToolWithCategory[]>({
     queryKey: [useQualityFilter ? "/api/tools/quality" : "/api/tools"],
@@ -62,8 +65,8 @@ export default function CompatibilityMatrixPage({ searchQuery }: CompatibilityMa
   };
 
   const handleEditTool = (tool: ToolWithCategory) => {
-    // TODO: Implement edit functionality
-    console.log("Edit tool:", tool);
+    setEditingTool(tool);
+    setIsEditOpen(true);
     setIsModalOpen(false);
   };
 
@@ -287,6 +290,12 @@ export default function CompatibilityMatrixPage({ searchQuery }: CompatibilityMa
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onEdit={handleEditTool}
+      />
+
+      <EditToolDialog 
+        open={isEditOpen} 
+        onOpenChange={setIsEditOpen} 
+        tool={editingTool!} 
       />
     </div>
   );

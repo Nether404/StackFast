@@ -17,3 +17,8 @@ Browserslist: browsers data (caniuse-lite) is 11 months old. Please run:
 [2m6:25:31 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx?v=mf86vujd, /src/index.css?v=mf86vujd[22m
 [2m6:25:47 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx?v=mf86vujd, /src/index.css?v=mf86vujd[22m
 [2m6:25:47 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/quickstart.tsx, /src/index.css?v=mf86vujd[22m
+[2m6:45:49 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/tool-database.tsx, /src/index.css?v=mf86vujd[22m
+[2m6:45:55 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/compatibility-matrix.tsx, /src/index.css?v=mf86vujd[22m
+[2m6:46:39 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/tool-database.tsx, /src/index.css?v=mf86vujd[22m
+[2m6:46:39 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/components/edit-tool-dialog.tsx, /src/index.css?v=mf86vujd[22m
+[2m6:46:39 PM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/compatibility-matrix.tsx, /src/index.css?v=mf86vujd[22m

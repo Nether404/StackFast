@@ -14,6 +14,7 @@ import { Database, Zap, Download, Trash2, Upload, AlertTriangle, Search } from "
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { ToolWithCategory, ToolCategory } from "@shared/schema";
+import { EditToolDialog } from "@/components/edit-tool-dialog";
 
 interface ToolDatabasePageProps {
   searchQuery: string;
@@ -38,6 +39,8 @@ export default function ToolDatabasePage({ searchQuery, categoryFilter }: ToolDa
   const [selectedTool, setSelectedTool] = useState<ToolWithCategory | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [operationStatus, setOperationStatus] = useState<string | null>(null);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingTool, setEditingTool] = useState<ToolWithCategory | null>(null);
   
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -148,8 +151,8 @@ export default function ToolDatabasePage({ searchQuery, categoryFilter }: ToolDa
   };
 
   const handleEditTool = (tool: ToolWithCategory) => {
-    // TODO: Implement edit functionality
-    console.log("Edit tool:", tool);
+    setEditingTool(tool);
+    setIsEditOpen(true);
     setIsModalOpen(false);
   };
 
@@ -500,6 +503,12 @@ export default function ToolDatabasePage({ searchQuery, categoryFilter }: ToolDa
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onEdit={handleEditTool}
+      />
+
+      <EditToolDialog 
+        open={isEditOpen} 
+        onOpenChange={setIsEditOpen} 
+        tool={editingTool!} 
       />
     </div>
   );
