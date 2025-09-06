@@ -12,6 +12,7 @@ import { useState } from "react";
 
 // Pages
 import DashboardPage from "@/pages/dashboard";
+import QuickStartPage from "@/pages/quickstart";
 import CompatibilityMatrixPage from "@/pages/compatibility-matrix";
 import ToolDatabasePage from "@/pages/tool-database";
 import ComparePage from "@/pages/compare";
@@ -50,13 +51,7 @@ function Router() {
           <Switch>
             {/* Main routes */}
             <Route path="/" component={DashboardPage} />
-            <Route path="/quickstart">
-              {/* Quickstart page - to be implemented */}
-              <div className="max-w-4xl mx-auto">
-                <h1 className="text-3xl font-bold mb-4">Quick Start Guide</h1>
-                <p className="text-github-text-secondary">Get started with TechStack Explorer in minutes.</p>
-              </div>
-            </Route>
+            <Route path="/quickstart" component={QuickStartPage} />
             <Route path="/stack-builder" component={StackBuilder} />
             <Route path="/blueprint" component={BlueprintBuilder} />
             <Route path="/tools">

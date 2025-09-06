@@ -42,6 +42,7 @@ export interface IStorage {
   updateTool(id: string, tool: Partial<InsertTool>): Promise<Tool | undefined>;
   deleteTool(id: string): Promise<boolean>;
   getAlternativeTools(toolId: string): Promise<Tool[]>;
+  exportToolsAsCSV(): Promise<string>;
 
   // Compatibilities
   getCompatibilities(): Promise<Compatibility[]>;
@@ -49,7 +50,8 @@ export interface IStorage {
   getCompatibility(toolOneId: string, toolTwoId: string): Promise<Compatibility | undefined>;
   createCompatibility(compatibility: InsertCompatibility): Promise<Compatibility>;
   updateCompatibility(id: string, compatibility: Partial<InsertCompatibility>): Promise<Compatibility | undefined>;
-  deleteCompatibility(id: string): Promise<boolean>;
+  deleteCompatibilityById(id: string): Promise<boolean>;
+  deleteCompatibilityPair(toolOneId: string, toolTwoId: string): Promise<boolean>;
 
   // Stack Templates
   getStackTemplates(): Promise<StackTemplate[]>;
@@ -82,7 +84,7 @@ export interface IStorage {
   // Export Functions
   exportStackAsJSON(toolIds?: string[]): Promise<any>;
   exportStackAsCSV(toolIds?: string[]): Promise<string>;
-
+  
   // Utility Functions
   clearAllTools(): Promise<void>;
   clearAllCompatibilities(): Promise<void>;
@@ -1923,6 +1925,34 @@ export class MemStorage implements IStorage {
     // Simple mock implementation for MemStorage
     return { generated: 0, updated: 0 };
   }
+
+  async exportToolsAsCSV(): Promise<string> {
+    const header = [
+      "id","name","description","category","url","frameworks","languages","features","integrations","maturityScore","popularityScore","pricing","notes"
+    ].join(",") + "\n";
+    const all = Array.from(this.tools.values());
+    if (all.length === 0) {
+      return header; // template only
+    }
+    const categoryName = (id: string) => this.toolCategories.get(id)?.name || "";
+    const esc = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const row = (t: Tool) => [
+      t.id,
+      t.name,
+      t.description || "",
+      categoryName(t.categoryId),
+      t.url || "",
+      (t.frameworks || []).join(";"),
+      (t.languages || []).join(";"),
+      (t.features || []).join(";"),
+      (t.integrations || []).join(";"),
+      t.maturityScore ?? 0,
+      t.popularityScore ?? 0,
+      t.pricing || "",
+      t.notes || "",
+    ].map(esc).join(",");
+    return header + all.map(row).join("\n") + "\n";
+  }
 }
 
 
@@ -2092,17 +2122,17 @@ export class DatabaseStorage implements IStorage {
   async getAlternativeTools(toolId: string): Promise<Tool[]> {
     const tool = await this.getTool(toolId);
     if (!tool) return [];
-    
     return db.select().from(toolsTable).where(eq(toolsTable.categoryId, tool.categoryId)).limit(5);
   }
 
+  // Keep a single implementation of getToolsByIds
   async getToolsByIds(toolIds: string[]): Promise<Tool[]> {
     if (toolIds.length === 0) return [];
-    
     const tools = await db.select().from(toolsTable);
     return tools.filter(tool => toolIds.includes(tool.id));
   }
 
+  // Keep a single implementation of getCompatibilitiesByToolId
   async getCompatibilitiesByToolId(toolId: string): Promise<Compatibility[]> {
     const compatibilities = await db.select().from(compatibilitiesTable).where(
       sql`${compatibilitiesTable.toolOneId} = ${toolId} OR ${compatibilitiesTable.toolTwoId} = ${toolId}`
@@ -2176,7 +2206,7 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async deleteCompatibility(id: string): Promise<boolean> {
+  async deleteCompatibilityById(id: string): Promise<boolean> {
     const result = await db.delete(compatibilitiesTable).where(eq(compatibilitiesTable.id, id));
     return (result.rowCount || 0) > 0;
   }
@@ -2238,7 +2268,7 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async deleteCompatibility(toolOneId: string, toolTwoId: string): Promise<boolean> {
+  async deleteCompatibilityPair(toolOneId: string, toolTwoId: string): Promise<boolean> {
     const result = await db.delete(compatibilitiesTable)
       .where(
         and(
@@ -2249,18 +2279,7 @@ export class DatabaseStorage implements IStorage {
     return result.rowCount > 0;
   }
 
-  async getToolsByIds(ids: string[]): Promise<Tool[]> {
-    if (ids.length === 0) return [];
-    return db.select().from(toolsTable).where(sql`${toolsTable.id} = ANY(${ids})`);
-  }
-
-  async getCompatibilitiesByToolId(toolId: string): Promise<Compatibility[]> {
-    return db.select()
-      .from(compatibilitiesTable)
-      .where(
-        sql`${compatibilitiesTable.toolOneId} = ${toolId} OR ${compatibilitiesTable.toolTwoId} = ${toolId}`
-      );
-  }
+  // Remove duplicated alternate versions of these methods
 
   async searchTools(query: string): Promise<Tool[]> {
     return db.select()
@@ -2664,7 +2683,35 @@ export class DatabaseStorage implements IStorage {
       throw error;
     }
   }
+
+  async exportToolsAsCSV(): Promise<string> {
+    const all = await this.getToolsWithCategory();
+    const header = [
+      "id","name","description","category","url","frameworks","languages","features","integrations","maturityScore","popularityScore","pricing","notes"
+    ].join(",") + "\n";
+    if (all.length === 0) {
+      return header; // template only
+    }
+    const esc = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const row = (t: any) => [
+      t.id,
+      t.name,
+      t.description || "",
+      t.category?.name || "",
+      t.url || "",
+      (t.frameworks || []).join(";"),
+      (t.languages || []).join(";"),
+      (t.features || []).join(";"),
+      (t.integrations || []).join(";"),
+      t.maturityScore ?? 0,
+      t.popularityScore ?? 0,
+      t.pricing || "",
+      t.notes || "",
+    ].map(esc).join(",");
+    return header + all.map(row).join("\n") + "\n";
+  }
 }
 
 // Use database storage instead of memory storage
-export const storage = new DatabaseStorage();
+// Use database storage when DATABASE_URL is configured; otherwise fall back to in-memory storage.
+export const storage = process.env.DATABASE_URL ? new DatabaseStorage() : new MemStorage();

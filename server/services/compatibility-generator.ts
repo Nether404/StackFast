@@ -107,7 +107,8 @@ export class CompatibilityGenerator {
             compatibilityScore: score,
             notes: this.generateCompatibilityNotes(toolOne, toolTwo, score),
             verifiedIntegration: score >= 80 ? 1 : 0,
-            integrationDifficulty: score >= 70 ? "Easy" : score >= 40 ? "Moderate" : "Difficult"
+            // Align with schema defaults (easy|medium|hard)
+            integrationDifficulty: score >= 70 ? "easy" : score >= 40 ? "medium" : "hard"
           };
           
           await storage.createCompatibility(compatibility);
@@ -330,8 +331,8 @@ export class CompatibilityGenerator {
       // Delete tools with very poor data quality
       const shouldDelete = 
         (!tool.description || tool.description.length < 10) ||
-        (tool.popularity < 10) ||
-        (tool.maturity < 20) ||
+        ((tool as any).popularityScore !== undefined && (tool as any).popularityScore < 10) ||
+        ((tool as any).maturityScore !== undefined && (tool as any).maturityScore < 20) ||
         (!tool.features || tool.features.length === 0);
       
       if (shouldDelete) {

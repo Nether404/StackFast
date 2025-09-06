@@ -171,6 +171,26 @@ export default function ToolDatabasePage({ searchQuery, categoryFilter }: ToolDa
     }
   };
 
+  const handleDownloadCSV = async () => {
+    try {
+      const res = await fetch("/api/tools/export-csv");
+      const text = await res.text();
+      const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = tools.length > 0 ? "tools.csv" : "tools-template.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setOperationStatus("CSV downloaded successfully");
+    } catch (e) {
+      setOperationStatus("Failed to download CSV");
+      toast({ title: "Download Error", description: "Unable to download CSV.", variant: "destructive" });
+    }
+  };
+
   const filteredTools = tools.filter((tool) => {
     // Apply advanced filters if set
     if (advancedFilters) {
@@ -356,6 +376,16 @@ export default function ToolDatabasePage({ searchQuery, categoryFilter }: ToolDa
                 >
                   <Upload className="h-4 w-4" />
                   {importCSVMutation.isPending ? "Importing..." : "Import Clean CSV Data"}
+                </Button>
+
+                <Button
+                  onClick={handleDownloadCSV}
+                  className="flex items-center gap-2"
+                  variant="secondary"
+                  data-testid="button-export-csv"
+                >
+                  <Download className="h-4 w-4" />
+                  Download CSV Data
                 </Button>
               </div>
               

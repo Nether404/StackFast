@@ -1,10 +1,10 @@
 import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
-import { nanoid } from "nanoid";
 
 const viteLogger = createLogger();
 
@@ -45,8 +45,9 @@ export async function setupVite(app: Express, server: Server) {
     const url = req.originalUrl;
 
     try {
+      const __dirname = path.dirname(fileURLToPath(import.meta.url));
       const clientTemplate = path.resolve(
-        import.meta.dirname,
+        __dirname,
         "..",
         "client",
         "index.html",
@@ -54,9 +55,10 @@ export async function setupVite(app: Express, server: Server) {
 
       // always reload the index.html file from disk incase it changes
       let template = await fs.promises.readFile(clientTemplate, "utf-8");
+      const cacheBust = Date.now().toString(36);
       template = template.replace(
         `src="/src/main.tsx"`,
-        `src="/src/main.tsx?v=${nanoid()}"`,
+        `src="/src/main.tsx?v=${cacheBust}"`,
       );
       const page = await vite.transformIndexHtml(url, template);
       res.status(200).set({ "Content-Type": "text/html" }).end(page);
@@ -68,7 +70,9 @@ export async function setupVite(app: Express, server: Server) {
 }
 
 export function serveStatic(app: Express) {
-  const distPath = path.resolve(import.meta.dirname, "public");
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  // Serve built client from dist/public at project root
+  const distPath = path.resolve(__dirname, "..", "dist", "public");
 
   if (!fs.existsSync(distPath)) {
     throw new Error(

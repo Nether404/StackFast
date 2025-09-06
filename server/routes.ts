@@ -31,6 +31,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const categoryData = insertToolCategorySchema.parse(req.body);
       const category = await storage.createToolCategory(categoryData);
+      invalidateCache("/api/categories");
       res.status(201).json(category);
     } catch (error) {
       res.status(400).json({ message: "Invalid category data" });
@@ -44,6 +45,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!category) {
         return res.status(404).json({ message: "Category not found" });
       }
+      invalidateCache("/api/categories");
       res.json(category);
     } catch (error) {
       res.status(400).json({ message: "Invalid category data" });
@@ -56,6 +58,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!deleted) {
         return res.status(404).json({ message: "Category not found" });
       }
+      invalidateCache("/api/categories");
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ message: "Failed to delete category" });
@@ -145,6 +148,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Export tools as CSV (or template if empty) - must be before :id route
+  app.get("/api/tools/export-csv", async (_req, res) => {
+    try {
+      const csv = await storage.exportToolsAsCSV();
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", "attachment; filename=tools.csv");
+      res.send(csv);
+    } catch (error) {
+      console.error("Export tools CSV error:", error);
+      res.status(500).json({ message: "Failed to export tools CSV" });
+    }
+  });
+
   app.get("/api/tools/:id", async (req, res) => {
     try {
       const tool = await storage.getToolWithCategory(req.params.id);
@@ -161,6 +177,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const toolData = insertToolSchema.parse(req.body);
       const tool = await storage.createTool(toolData);
+      invalidateCache("/api/tools");
+      invalidateCache("/api/tools/quality");
+      invalidateCache("/api/compatibility-matrix");
       res.status(201).json(tool);
     } catch (error) {
       res.status(400).json({ message: "Invalid tool data" });
@@ -174,6 +193,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tool) {
         return res.status(404).json({ message: "Tool not found" });
       }
+      invalidateCache("/api/tools");
+      invalidateCache("/api/tools/quality");
+      invalidateCache("/api/compatibility-matrix");
       res.json(tool);
     } catch (error) {
       res.status(400).json({ message: "Invalid tool data" });
@@ -186,6 +208,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!deleted) {
         return res.status(404).json({ message: "Tool not found" });
       }
+      invalidateCache("/api/tools");
+      invalidateCache("/api/tools/quality");
+      invalidateCache("/api/compatibility-matrix");
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ message: "Failed to delete tool" });
@@ -196,6 +221,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/tools", async (req, res) => {
     try {
       await storage.clearAllTools();
+      invalidateCache("/api/tools");
+      invalidateCache("/api/tools/quality");
+      invalidateCache("/api/categories");
+      invalidateCache("/api/compatibility-matrix");
       res.json({ message: "All tools cleared successfully" });
     } catch (error) {
       console.error("Clear tools error:", error);
@@ -210,6 +239,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await migrateToMultipleCategories();
       
       if (result.success) {
+        invalidateCache("/api/tools");
+        invalidateCache("/api/compatibility-matrix");
         res.json({
           message: "Categories migration successful",
           ...result
@@ -230,6 +261,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/tools/import-csv", async (req, res) => {
     try {
       const imported = await storage.importToolsFromCSV();
+      invalidateCache("/api/tools");
+      invalidateCache("/api/tools/quality");
+      invalidateCache("/api/compatibility-matrix");
       res.json({ message: `Successfully imported ${imported} tools from CSV` });
     } catch (error) {
       console.error("Import CSV error:", error);
@@ -237,10 +271,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+
   // Generate compatibility scores for all tool pairs
   app.post("/api/tools/generate-compatibility", async (req, res) => {
     try {
       const result = await storage.generateCompatibilityScores();
+      invalidateCache("/api/compatibility-matrix");
       res.json({ 
         message: "Compatibility scores generated successfully",
         generated: result.generated,
@@ -258,6 +294,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { importStackFastTools } = await import('./services/import-stackfast-tools');
       const result = await importStackFastTools();
+      invalidateCache("/api/tools");
+      invalidateCache("/api/tools/quality");
+      invalidateCache("/api/compatibility-matrix");
       res.json({ 
         message: `Successfully imported ${result.imported} StackFast tools`,
         imported: result.imported,
@@ -380,24 +419,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Generate enhanced blueprint with compatibility awareness
-  app.post("/api/v1/blueprint", async (req, res) => {
-    try {
-      const { blueprintGenerator } = await import('./services/blueprint-generator');
-      const blueprint = await blueprintGenerator.generateBlueprint(req.body);
-      res.json({
-        success: true,
-        blueprint,
-        timestamp: new Date().toISOString()
-      });
-    } catch (error) {
-      console.error("Blueprint generation error:", error);
-      res.status(500).json({ 
-        success: false,
-        error: "Failed to generate blueprint",
-        message: error instanceof Error ? error.message : "Unknown error"
-      });
-    }
-  });
+  // (canonical definition retained below)
 
   // Get tool recommendations for a project idea
   app.post("/api/v1/tools/recommend", async (req, res) => {
@@ -602,10 +624,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/compatibilities/:id", async (req, res) => {
     try {
-      const deleted = await storage.deleteCompatibility(req.params.id);
+      const deleted = await storage.deleteCompatibilityById(req.params.id);
       if (!deleted) {
         return res.status(404).json({ message: "Compatibility not found" });
       }
+      invalidateCache("/api/compatibility-matrix");
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ message: "Failed to delete compatibility" });
@@ -615,14 +638,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ===== NEW STACKFAST INTEGRATION ENDPOINTS =====
   
   // Stack Templates endpoints
-  app.get("/api/stack-templates", async (req, res) => {
-    try {
-      const templates = await storage.getStackTemplates();
-      res.json(templates);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch stack templates" });
-    }
-  });
+  // (single definition retained below)
 
   app.get("/api/stack-templates/:id", async (req, res) => {
     try {
@@ -636,20 +652,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Stack Validation endpoint - validates a proposed tech stack
-  app.post("/api/stack/validate", async (req, res) => {
-    try {
-      const { toolIds } = req.body;
-      if (!Array.isArray(toolIds) || toolIds.length === 0) {
-        return res.status(400).json({ message: "toolIds must be a non-empty array" });
-      }
-      
-      const validation = await storage.validateStack(toolIds);
-      res.json(validation);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to validate stack" });
-    }
-  });
+  // (duplicate /api/stack/validate removed)
 
   // Stack Validation - validates tool compatibility in a stack
   app.post("/api/stack/validate", async (req, res) => {
@@ -666,7 +669,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Stack Templates - get pre-built stack configurations
+  // Stack Templates - get pre-built stack configurations (single)
   app.get("/api/stack-templates", async (req, res) => {
     try {
       const templates = await storage.getStackTemplates();
@@ -938,52 +941,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Search tools with filters
   app.get("/api/v1/tools/search", async (req, res) => {
     try {
-      const { 
-        query, 
-        category, 
-        minPopularity, 
+      const {
+        query,
+        q,
+        category,
+        minPopularity,
         minMaturity,
+        min_popularity,
+        min_maturity,
         hasFreeTier,
-        limit = 20 
-      } = req.query;
-      
+        frameworks,
+        languages,
+        limit = 20,
+        summary
+      } = req.query as Record<string, any>;
+
+      const searchTerm = (query || q)?.toString().toLowerCase();
+      const frameworksList = (frameworks ? frameworks.toString().split(",") : []).map((s: string) => s.trim().toLowerCase()).filter(Boolean);
+      const languagesList = (languages ? languages.toString().split(",") : []).map((s: string) => s.trim().toLowerCase()).filter(Boolean);
+      const minPop = parseFloat((minPopularity || min_popularity || "").toString());
+      const minMat = parseFloat((minMaturity || min_maturity || "").toString());
+      const limitNum = parseInt(limit.toString(), 10);
+      const wantSummary = (summary || "").toString().toLowerCase() === "true";
+
       let tools = await storage.getToolsWithCategory();
-      
-      // Apply filters
-      if (query) {
-        const searchTerm = query.toString().toLowerCase();
-        tools = tools.filter(t => 
-          t.name.toLowerCase().includes(searchTerm) ||
+
+      // Text search
+      if (searchTerm) {
+        tools = tools.filter((t: any) =>
+          t.name?.toLowerCase().includes(searchTerm) ||
           t.description?.toLowerCase().includes(searchTerm) ||
-          t.features?.some((f: string) => f.toLowerCase().includes(searchTerm))
+          (Array.isArray(t.features) && t.features.some((f: string) => f.toLowerCase().includes(searchTerm)))
         );
       }
-      
+
+      // Category filter (accept exact or case-insensitive match on name)
       if (category) {
-        tools = tools.filter(t => t.category.name === category);
+        const cat = category.toString().toLowerCase();
+        tools = tools.filter((t: any) => t.category?.name?.toLowerCase() === cat || t.category?.name?.toLowerCase().includes(cat));
       }
-      
-      if (minPopularity) {
-        tools = tools.filter(t => t.popularityScore >= parseFloat(minPopularity.toString()));
+
+      // Score filters (support snake_case and camelCase)
+      if (!isNaN(minPop)) {
+        tools = tools.filter((t: any) => t.popularityScore >= minPop);
       }
-      
-      if (minMaturity) {
-        tools = tools.filter(t => t.maturityScore >= parseFloat(minMaturity.toString()));
+      if (!isNaN(minMat)) {
+        tools = tools.filter((t: any) => t.maturityScore >= minMat);
       }
-      
-      if (hasFreeTier === 'true') {
-        tools = tools.filter(t => t.pricing?.toLowerCase().includes('free'));
+
+      // Free tier filter
+      if ((hasFreeTier || "").toString() === "true") {
+        tools = tools.filter((t: any) => t.pricing?.toLowerCase().includes("free"));
       }
-      
-      // Sort by popularity and limit
-      tools = tools
-        .sort((a, b) => (b.popularityScore + b.maturityScore) - (a.popularityScore + a.maturityScore))
-        .slice(0, parseInt(limit.toString()));
-      
+
+      // Framework filters (any match, case-insensitive substring)
+      if (frameworksList.length > 0) {
+        tools = tools.filter((t: any) => Array.isArray(t.frameworks) && frameworksList.some((f: string) =>
+          t.frameworks.some((tf: string) => tf.toLowerCase().includes(f))
+        ));
+      }
+
+      // Language filters
+      if (languagesList.length > 0) {
+        tools = tools.filter((t: any) => Array.isArray(t.languages) && languagesList.some((l: string) =>
+          t.languages.some((tl: string) => tl.toLowerCase().includes(l))
+        ));
+      }
+
+      // Sort by combined popularity + maturity
+      tools = tools.sort((a: any, b: any) => (b.popularityScore + b.maturityScore) - (a.popularityScore + a.maturityScore));
+
+      const limited = tools.slice(0, limitNum);
+
+      const summarize = (t: any) => ({
+        id: t.id,
+        name: t.name,
+        category: t.category?.name || null,
+        description: t.description,
+        url: t.url,
+        maturityScore: t.maturityScore,
+        popularityScore: t.popularityScore
+      });
+
       res.json({
-        results: tools,
-        count: tools.length,
-        filters: { query, category, minPopularity, minMaturity, hasFreeTier }
+        results: wantSummary ? limited.map(summarize) : limited,
+        count: limited.length,
+        filters: { query: searchTerm, category, minPopularity: minPop, minMaturity: minMat, hasFreeTier, frameworks: frameworksList, languages: languagesList, summary: wantSummary }
       });
     } catch (error) {
       res.status(500).json({ message: "Failed to search tools" });
@@ -1066,31 +1109,124 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to fetch categories" });
     }
   });
-  
-  // Get migration path between tools
-  app.get("/api/v1/migration/:fromTool/:toTool", async (req, res) => {
+
+  // Python API-compatible aliases
+  app.get("/api/tools/search", async (req, res) => {
+    // Delegate to v1 search to keep a single implementation
+    (req as any).query = { ...req.query, q: req.query.q || req.query.query };
+    // Reuse handler logic by calling the same function body
+    // Not easily re-entrant without refactor; forward by calling storage directly
     try {
-      const { fromTool, toTool } = req.params;
-      const path = await storage.getMigrationPath(fromTool, toTool);
-      
-      if (!path) {
-        return res.status(404).json({ 
-          message: "No migration path available",
-          fromTool,
-          toTool
-        });
-      }
-      
-      res.json({
-        fromTool,
-        toTool,
-        migrationPath: path,
-        compatibility: await storage.getCompatibility(fromTool, toTool)
-      });
+      const forwardReq = { ...req, query: { ...req.query, q: (req.query as any).q || (req.query as any).query } } as any;
+      const { q, category, min_maturity, min_popularity, frameworks, languages, per_page, summary } = forwardReq.query as any;
+      const limit = per_page || forwardReq.query.limit || 20;
+      const url = new URL(`http://localhost/dummy?limit=${limit}`);
+      // Build params compatible with /api/v1/tools/search
+      const mapped = {
+        q,
+        category,
+        min_maturity,
+        min_popularity,
+        frameworks,
+        languages,
+        limit,
+        summary
+      } as any;
+      forwardReq.query = mapped;
+      // Inline invoke the v1 logic by duplicating the minimal path: use storage and mapping
+      const resp: any = await (async () => {
+        const queryHandler = async () => {
+          const {
+            q,
+            category,
+            min_popularity,
+            min_maturity,
+            frameworks,
+            languages,
+            limit,
+            summary
+          } = forwardReq.query as Record<string, any>;
+
+          const searchTerm = (q || "").toString().toLowerCase();
+          const frameworksList = (frameworks ? frameworks.toString().split(",") : []).map((s: string) => s.trim().toLowerCase()).filter(Boolean);
+          const languagesList = (languages ? languages.toString().split(",") : []).map((s: string) => s.trim().toLowerCase()).filter(Boolean);
+          const minPop = parseFloat((min_popularity || "").toString());
+          const minMat = parseFloat((min_maturity || "").toString());
+          const limitNum = parseInt((limit || 20).toString(), 10);
+          const wantSummary = (summary || "").toString().toLowerCase() === "true";
+
+          let tools = await storage.getToolsWithCategory();
+
+          if (searchTerm) {
+            tools = tools.filter((t: any) =>
+              t.name?.toLowerCase().includes(searchTerm) ||
+              t.description?.toLowerCase().includes(searchTerm) ||
+              (Array.isArray(t.features) && t.features.some((f: string) => f.toLowerCase().includes(searchTerm)))
+            );
+          }
+          if (category) {
+            const cat = category.toString().toLowerCase();
+            tools = tools.filter((t: any) => t.category?.name?.toLowerCase().includes(cat));
+          }
+          if (!isNaN(minPop)) tools = tools.filter((t: any) => t.popularityScore >= minPop);
+          if (!isNaN(minMat)) tools = tools.filter((t: any) => t.maturityScore >= minMat);
+          if ((forwardReq.query.hasFreeTier || "").toString() === "true") {
+            tools = tools.filter((t: any) => t.pricing?.toLowerCase().includes("free"));
+          }
+          if (frameworksList.length > 0) {
+            tools = tools.filter((t: any) => Array.isArray(t.frameworks) && frameworksList.some((f: string) =>
+              t.frameworks.some((tf: string) => tf.toLowerCase().includes(f))
+            ));
+          }
+          if (languagesList.length > 0) {
+            tools = tools.filter((t: any) => Array.isArray(t.languages) && languagesList.some((l: string) =>
+              t.languages.some((tl: string) => tl.toLowerCase().includes(l))
+            ));
+          }
+
+          tools = tools.sort((a: any, b: any) => (b.popularityScore + b.maturityScore) - (a.popularityScore + a.maturityScore));
+          const limited = tools.slice(0, limitNum);
+          const summarize = (t: any) => ({ id: t.id, name: t.name, category: t.category?.name || null, description: t.description, url: t.url, maturityScore: t.maturityScore, popularityScore: t.popularityScore });
+          return { results: wantSummary ? limited.map(summarize) : limited, count: limited.length };
+        };
+        return await queryHandler();
+      })();
+      res.json(resp);
     } catch (error) {
-      res.status(500).json({ message: "Failed to fetch migration path" });
+      res.status(500).json({ message: "Failed to search tools" });
     }
   });
+
+  app.get("/api/tools/categories", async (_req, res) => {
+    try {
+      const categories = await storage.getToolCategories();
+      res.json({ categories: categories.map((c) => c.name) });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch categories" });
+    }
+  });
+
+  app.get("/api/v1/tools/stats", async (_req, res) => {
+    try {
+      const tools = await storage.getTools();
+      const categories = await storage.getToolCategories();
+      const byCategory: Record<string, number> = {};
+      for (const cat of categories) byCategory[cat.name] = 0;
+      for (const t of tools) {
+        const cat = categories.find((c) => c.id === t.categoryId);
+        if (cat) byCategory[cat.name] = (byCategory[cat.name] || 0) + 1;
+      }
+      res.json({
+        total_tools: tools.length,
+        total_categories: categories.length,
+        category_breakdown: byCategory
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch stats" });
+    }
+  });
+  
+  // (duplicate /api/v1/migration/:fromTool/:toTool removed; canonical earlier)
   
   // ===== END OF STACKFAST API ENDPOINTS =====
 
@@ -1269,14 +1405,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 20;
+      const summary = ((req.query.summary as string) || '').toLowerCase() === 'true';
       const offset = (page - 1) * limit;
       
       const allTools = await storage.getToolsWithAllCategories();
       const totalCount = allTools.length;
       const tools = allTools.slice(offset, offset + limit);
+      const summarize = (t: any) => ({
+        id: t.id,
+        name: t.name,
+        category: t.category?.name || null,
+        description: t.description,
+        url: t.url,
+        maturityScore: t.maturityScore,
+        popularityScore: t.popularityScore
+      });
       
       res.json({
-        tools,
+        tools: summary ? tools.map(summarize) : tools,
         pagination: {
           page,
           limit,
