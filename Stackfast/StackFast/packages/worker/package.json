@@ -1,0 +1,36 @@
+{
+  "name": "@stackfast/worker",
+  "version": "1.0.0",
+  "main": "dist/worker.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/worker.js",
+    "dev": "tsx watch src/worker.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@stackfast/schemas": "*",
+    "@upstash/qstash": "^2.8.2",
+    "@upstash/redis": "^1.35.3",
+    "bullmq": "^5.0.0",
+    "ioredis": "^5.3.0",
+    "dotenv": "^16.3.1",
+    "playwright": "^1.54.2",
+    "marked": "^9.0.0",
+    "node-fetch": "^3.3.2",
+    "express": "^4.18.2",
+    "@google-cloud/firestore": "^7.0.0",
+    "zod": "^3.22.2",
+    "zod-to-json-schema": "^3.24.6",
+    "diff": "^5.1.0",
+    "remark": "^15.0.1",
+    "remark-parse": "^11.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.4.8",
+    "@types/express": "^4.17.17",
+    "@types/diff": "^5.0.0",
+    "tsx": "^4.0.0"
+  }
+} 

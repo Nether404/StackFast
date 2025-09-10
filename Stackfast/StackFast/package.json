@@ -1,0 +1,42 @@
+{
+  "name": "stackfast-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix --max-warnings=0",
+    "test": "turbo run test",
+    "import:devtools": "node scripts/import-devtools.js",
+    "dev": "npm run dev --workspace=@stackfast/app",
+    "dev:api": "npm run dev --workspace=@stackfast/api",
+    "dev:worker": "npm run dev --workspace=@stackfast/worker"
+  },
+  "dependencies": {
+    "zod": "^3.22.2",
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.0.0",
+    "express-rate-limit": "^6.9.0"
+  },
+  "devDependencies": {
+    "turbo": "^1.10.12",
+    "typescript": "^5.1.6",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint-plugin-react": "^7.35.0",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "vitest": "^1.6.0",
+    "@types/node": "^20.4.8",
+    "supertest": "^7.0.0",
+    "ts-node": "^10.9.2",
+    "@sentry/node": "^8.25.0",
+    "pino": "^9.3.2",
+    "sql.js": "^1.10.2"
+  }
+}
