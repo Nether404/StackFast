@@ -137,6 +137,46 @@ export function queryErrorHandler(error: any) {
   }
 }
 
+// Enhanced error recovery mechanisms
+export class ErrorRecoveryManager {
+  private static retryAttempts = new Map<string, number>();
+  private static maxRetries = 3;
+  
+  static canRetry(errorKey: string): boolean {
+    const attempts = this.retryAttempts.get(errorKey) || 0;
+    return attempts < this.maxRetries;
+  }
+  
+  static recordRetry(errorKey: string): void {
+    const attempts = this.retryAttempts.get(errorKey) || 0;
+    this.retryAttempts.set(errorKey, attempts + 1);
+  }
+  
+  static resetRetries(errorKey: string): void {
+    this.retryAttempts.delete(errorKey);
+  }
+  
+  static clearAllRetries(): void {
+    this.retryAttempts.clear();
+  }
+}
+
+// Graceful degradation helpers - moved to React components
+
+// Error boundary integration
+export function reportErrorToBoundary(error: Error, errorInfo?: any): void {
+  ErrorLogger.log({
+    message: error.message,
+    code: 'BOUNDARY_ERROR',
+    details: {
+      stack: error.stack,
+      componentStack: errorInfo?.componentStack,
+      errorBoundary: errorInfo?.errorBoundary
+    },
+    timestamp: new Date()
+  });
+}
+
 // Mutation error handler with retry
 export async function mutationWithRetry<T>(
   mutationFn: () => Promise<T>,

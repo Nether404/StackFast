@@ -21,7 +21,9 @@ import {
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { db } from "./db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, inArray } from "drizzle-orm";
+import { DatabaseOptimizer } from "./services/database-optimizer";
+import { DatabaseQueryMonitor } from "./middleware/performance-monitoring";
 
 export interface IStorage {
   // Tool Categories
@@ -1959,6 +1961,20 @@ export class MemStorage implements IStorage {
 
 // Database Storage Implementation
 export class DatabaseStorage implements IStorage {
+  constructor() {
+    // Initialize database optimizations
+    this.initializeOptimizations();
+  }
+
+  private async initializeOptimizations() {
+    try {
+      await DatabaseOptimizer.applyIndexes();
+      console.log('Database indexes applied successfully');
+    } catch (error) {
+      console.error('Failed to apply database indexes:', error);
+    }
+  }
+
   // Copy seed data method from MemStorage  
   async seedDatabase(): Promise<{ categories: number; tools: number; compatibilities: number }> {
     // Create a temporary MemStorage instance to get seed data
@@ -2003,8 +2019,16 @@ export class DatabaseStorage implements IStorage {
     };
   }
   
+  // Database query monitoring wrapper
+  private async monitoredQuery<T>(queryName: string, queryFn: () => Promise<T>, requestId?: string): Promise<T> {
+    return DatabaseQueryMonitor.trackQuery(queryName, queryFn, requestId);
+  }
+
   async getToolCategories(): Promise<ToolCategory[]> {
-    return db.select().from(toolCategoriesTable);
+    return this.monitoredQuery(
+      'getToolCategories',
+      () => db.select().from(toolCategoriesTable)
+    );
   }
 
   async getToolCategory(id: string): Promise<ToolCategory | undefined> {
@@ -2032,8 +2056,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTool(id: string): Promise<Tool | undefined> {
-    const [tool] = await db.select().from(toolsTable).where(eq(toolsTable.id, id));
-    return tool;
+    return this.monitoredQuery(
+      'getTool',
+      async () => {
+        const [tool] = await db.select().from(toolsTable).where(eq(toolsTable.id, id));
+        return tool;
+      }
+    );
   }
 
   async getToolByName(name: string): Promise<Tool | undefined> {
@@ -2042,17 +2071,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getToolsWithCategory(): Promise<any[]> {
-    const tools = await db.select({
-      tool: toolsTable,
-      category: toolCategoriesTable
-    })
-    .from(toolsTable)
-    .leftJoin(toolCategoriesTable, eq(toolsTable.categoryId, toolCategoriesTable.id));
-    
-    return tools.map(({ tool, category }) => ({
-      ...tool,
-      category
-    }));
+    return this.monitoredQuery(
+      'getToolsWithCategory',
+      async () => {
+        const tools = await db.select({
+          tool: toolsTable,
+          category: toolCategoriesTable
+        })
+        .from(toolsTable)
+        .leftJoin(toolCategoriesTable, eq(toolsTable.categoryId, toolCategoriesTable.id));
+        
+        return tools.map(({ tool, category }) => ({
+          ...tool,
+          category
+        }));
+      }
+    );
   }
 
   async getToolsWithAllCategories(): Promise<any[]> {
@@ -2128,8 +2162,8 @@ export class DatabaseStorage implements IStorage {
   // Keep a single implementation of getToolsByIds
   async getToolsByIds(toolIds: string[]): Promise<Tool[]> {
     if (toolIds.length === 0) return [];
-    const tools = await db.select().from(toolsTable);
-    return tools.filter(tool => toolIds.includes(tool.id));
+    // Use optimized query with inArray for better performance
+    return await DatabaseOptimizer.getToolsByIdsOptimized(toolIds);
   }
 
   // Keep a single implementation of getCompatibilitiesByToolId
@@ -2170,27 +2204,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCompatibilityMatrix(): Promise<any[]> {
-    const result = await db.select({
-      compatibility: compatibilitiesTable,
-      toolOne: {
-        id: toolsTable.id,
-        name: toolsTable.name,
-        categoryId: toolsTable.categoryId
+    return this.monitoredQuery(
+      'getCompatibilityMatrix',
+      async () => {
+        // Use optimized compatibility matrix query to avoid N+1 queries
+        return await DatabaseOptimizer.getCompatibilityMatrixOptimized();
       }
-    })
-    .from(compatibilitiesTable)
-    .innerJoin(toolsTable, eq(compatibilitiesTable.toolOneId, toolsTable.id))
-    .orderBy(desc(compatibilitiesTable.compatibilityScore));
-
-    const toolsMap = new Map();
-    const tools = await this.getTools();
-    tools.forEach(tool => toolsMap.set(tool.id, tool));
-
-    return result.map(({ compatibility }) => ({
-      ...compatibility,
-      toolOne: toolsMap.get(compatibility.toolOneId),
-      toolTwo: toolsMap.get(compatibility.toolTwoId)
-    }));
+    );
   }
 
   async createCompatibility(data: InsertCompatibility): Promise<Compatibility> {
@@ -2382,21 +2402,8 @@ export class DatabaseStorage implements IStorage {
     score: number;
     notes?: string;
   }>> {
-    const results = [];
-    
-    for (let i = 0; i < toolIds.length; i++) {
-      for (let j = i + 1; j < toolIds.length; j++) {
-        const compatibility = await this.getCompatibility(toolIds[i], toolIds[j]);
-        results.push({
-          toolOneId: toolIds[i],
-          toolTwoId: toolIds[j],
-          score: compatibility?.compatibilityScore || 50,
-          notes: compatibility?.notes || "No explicit compatibility data available"
-        });
-      }
-    }
-    
-    return results;
+    // Use optimized bulk compatibility query to avoid N+1 queries
+    return await DatabaseOptimizer.getBulkCompatibilityOptimized(toolIds);
   }
 
   async getMigrationPath(fromToolId: string, toToolId: string): Promise<MigrationPath | undefined> {

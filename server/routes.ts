@@ -3,17 +3,89 @@ import { createServer, type Server } from "http";
 import { storage, DatabaseStorage } from "./storage";
 import { insertToolSchema, insertToolCategorySchema, insertCompatibilitySchema } from "@shared/schema";
 import { cacheMiddleware, invalidateCache } from "./middleware/cache";
+import { 
+  asyncHandler, 
+  validateRequest, 
+  withDatabaseErrorHandling,
+  sendSuccess,
+  throwNotFoundIf,
+  logger
+} from "./middleware/route-helpers";
+import { 
+  validateAndSanitizeRequest
+} from "./middleware/security";
+import { z } from "zod";
+import { 
+  rateLimiters 
+} from "./middleware/rate-limiting";
+import { 
+  auditMiddleware 
+} from "./middleware/audit";
+import { 
+  paramSchemas, 
+  querySchemas, 
+  bodySchemas 
+} from "./schemas/validation";
+import { 
+  compressionMiddleware, 
+  compressionHeaders 
+} from "./middleware/compression";
+import { 
+  paginationMiddleware, 
+  paginationHelpers 
+} from "./middleware/pagination";
+import { ResponseOptimizer } from "./services/response-optimizer";
+import { estimateCompressionRatio } from "./middleware/compression";
+import { 
+  getMetricsData, 
+  getHealthStatus,
+  DatabaseQueryMonitor 
+} from "./middleware/performance-monitoring";
+import { 
+  getAnalyticsData, 
+  submitUserFeedback, 
+  trackUserInteraction 
+} from "./middleware/analytics";
+import { registerDebugRoutes } from "./routes/debug";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Split into tools.routes.ts
-  app.get("/api/tools", async (req, res) => {
-    try {
-      const tools = await storage.getToolsWithAllCategories();
-      res.json(tools);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch tools" });
-    }
-  });
+  app.get("/api/tools", 
+    compressionMiddleware({ threshold: 2048, preferBrotli: true }),
+    paginationMiddleware(50, 500),
+    paginationHelpers(),
+    asyncHandler(async (req, res) => {
+      const tools = await withDatabaseErrorHandling(
+        () => storage.getToolsWithAllCategories(),
+        'fetch tools'
+      );
+      
+      // Apply pagination if requested
+      const pagination = (req as any).pagination;
+      if (pagination) {
+        const startIndex = pagination.offset;
+        const endIndex = startIndex + pagination.limit;
+        const paginatedTools = tools.slice(startIndex, endIndex);
+        
+        return (res as any).paginate(paginatedTools, tools.length);
+      }
+      
+      // Optimize response for large datasets
+      const optimizedResponse = ResponseOptimizer.createOptimizedResponse(tools, {
+        message: 'Tools retrieved successfully',
+        meta: { 
+          count: tools.length,
+          compressed: tools.length > 100 
+        },
+        serializationOptions: {
+          excludeFields: tools.length > 100 ? ['description', 'notes'] : [],
+          numberPrecision: 2
+        }
+      });
+      
+      res.json(optimizedResponse);
+    })
+  );
 
   // Seed database route
   app.post("/api/tools/seed", async (req, res) => {
@@ -34,8 +106,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get quality tools only - must be before :id route
-  app.get("/api/tools/quality", async (req, res) => {
+  app.get("/api/tools/quality", 
+    compressionMiddleware({ threshold: 1024, preferBrotli: true }),
+    paginationMiddleware(25, 200),
+    paginationHelpers(),
+    async (req, res) => {
     try {
+      const startTime = Date.now();
       const tools = await storage.getToolsWithAllCategories();
       
       // Define patterns for non-tools
@@ -81,7 +158,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return scoreB - scoreA;
         }); // Return all quality tools
         
-      res.json(qualityTools);
+      // Apply pagination if requested
+      const pagination = (req as any).pagination;
+      if (pagination) {
+        const startIndex = pagination.offset;
+        const endIndex = startIndex + pagination.limit;
+        const paginatedTools = qualityTools.slice(startIndex, endIndex);
+        
+        return (res as any).paginate(paginatedTools, qualityTools.length);
+      }
+      
+      // Optimize response
+      const optimizedResponse = ResponseOptimizer.createOptimizedResponse(qualityTools, {
+        message: 'Quality tools retrieved successfully',
+        meta: ResponseOptimizer.addPerformanceMetadata(startTime, {
+          totalFiltered: qualityTools.length,
+          filteringApplied: true
+        }),
+        serializationOptions: {
+          numberPrecision: 1,
+          excludeFields: qualityTools.length > 50 ? ['notes'] : []
+        }
+      });
+      
+      res.json(optimizedResponse);
     } catch (error) {
       console.error("Get quality tools error:", error);
       res.status(500).json({ message: "Failed to get quality tools" });
@@ -101,61 +201,86 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/tools/:id", async (req, res) => {
-    try {
-      const tool = await storage.getToolWithCategory(req.params.id);
-      if (!tool) {
-        return res.status(404).json({ message: "Tool not found" });
-      }
-      res.json(tool);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch tool" });
-    }
-  });
+  app.get("/api/tools/:id", 
+    validateAndSanitizeRequest({ params: paramSchemas.id }),
+    asyncHandler(async (req, res) => {
+      const tool = await withDatabaseErrorHandling(
+        () => storage.getToolWithCategory(req.params.id),
+        'fetch tool'
+      );
+      throwNotFoundIf(!tool, 'Tool', req.params.id);
+      sendSuccess(res, tool, 'Tool retrieved successfully');
+    })
+  );
 
-  app.post("/api/tools", async (req, res) => {
-    try {
-      const toolData = insertToolSchema.parse(req.body);
-      const tool = await storage.createTool(toolData);
+  app.post("/api/tools", 
+    rateLimiters.strict,
+    validateAndSanitizeRequest({ body: bodySchemas.createTool }),
+    auditMiddleware('CREATE', 'tool', { captureBody: true, captureResponse: true }),
+    asyncHandler(async (req, res) => {
+      const tool = await withDatabaseErrorHandling(
+        () => storage.createTool(req.body),
+        'create tool'
+      );
+      
+      // Invalidate relevant caches
       invalidateCache("/api/tools");
       invalidateCache("/api/tools/quality");
       invalidateCache("/api/compatibility-matrix");
-      res.status(201).json(tool);
-    } catch (error) {
-      res.status(400).json({ message: "Invalid tool data" });
-    }
-  });
+      
+      logger.info(`Tool created successfully: ${tool.name}`, { toolId: tool.id }, req.requestId);
+      sendSuccess(res, tool, 'Tool created successfully', 201);
+    })
+  );
 
-  app.put("/api/tools/:id", async (req, res) => {
-    try {
-      const toolData = insertToolSchema.partial().parse(req.body);
-      const tool = await storage.updateTool(req.params.id, toolData);
-      if (!tool) {
-        return res.status(404).json({ message: "Tool not found" });
-      }
+  app.put("/api/tools/:id", 
+    rateLimiters.strict,
+    validateAndSanitizeRequest({ 
+      params: paramSchemas.id, 
+      body: bodySchemas.updateTool 
+    }),
+    auditMiddleware('UPDATE', 'tool', { 
+      captureBody: true, 
+      captureResponse: true, 
+      resourceIdFromParams: 'id' 
+    }),
+    asyncHandler(async (req, res) => {
+      const tool = await withDatabaseErrorHandling(
+        () => storage.updateTool(req.params.id, req.body),
+        'update tool'
+      );
+      throwNotFoundIf(!tool, 'Tool', req.params.id);
+      
+      // Invalidate relevant caches
       invalidateCache("/api/tools");
       invalidateCache("/api/tools/quality");
       invalidateCache("/api/compatibility-matrix");
-      res.json(tool);
-    } catch (error) {
-      res.status(400).json({ message: "Invalid tool data" });
-    }
-  });
+      
+      logger.info(`Tool updated successfully: ${req.params.id}`, { toolId: req.params.id }, req.requestId);
+      sendSuccess(res, tool, 'Tool updated successfully');
+    })
+  );
 
-  app.delete("/api/tools/:id", async (req, res) => {
-    try {
-      const deleted = await storage.deleteTool(req.params.id);
-      if (!deleted) {
-        return res.status(404).json({ message: "Tool not found" });
-      }
+  app.delete("/api/tools/:id", 
+    rateLimiters.strict,
+    validateAndSanitizeRequest({ params: paramSchemas.id }),
+    auditMiddleware('DELETE', 'tool', { resourceIdFromParams: 'id' }),
+    asyncHandler(async (req, res) => {
+      const deleted = await withDatabaseErrorHandling(
+        () => storage.deleteTool(req.params.id),
+        'delete tool'
+      );
+      throwNotFoundIf(!deleted, 'Tool', req.params.id);
+      
+      // Invalidate relevant caches
       invalidateCache("/api/tools");
       invalidateCache("/api/tools/quality");
       invalidateCache("/api/compatibility-matrix");
+      
+      logger.info(`Tool deleted successfully: ${req.params.id}`, { toolId: req.params.id }, req.requestId);
       res.status(204).send();
-    } catch (error) {
-      res.status(500).json({ message: "Failed to delete tool" });
-    }
-  });
+    })
+  );
 
   // Clear all tools from database
   app.delete("/api/tools", async (req, res) => {
@@ -251,16 +376,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ===== STACKFAST INTEGRATION ENDPOINTS =====
   
   // Get tool recommendations for a project idea
-  app.post("/api/v1/tools/recommend", async (req, res) => {
+  app.post("/api/v1/tools/recommend", 
+    rateLimiters.search,
+    validateAndSanitizeRequest({ body: bodySchemas.toolRecommendations }),
+    async (req, res) => {
     try {
       const { idea, maxResults = 5, avoidTools = [] } = req.body;
-      
-      if (!idea) {
-        return res.status(400).json({ 
-          success: false,
-          error: "Project idea is required" 
-        });
-      }
 
       // Analyze idea to determine needed categories
       const ideaLower = idea.toLowerCase();
@@ -318,16 +439,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Analyze compatibility for a proposed tech stack
-  app.post("/api/v1/stack/compatibility-report", async (req, res) => {
+  app.post("/api/v1/stack/compatibility-report", 
+    rateLimiters.search,
+    validateAndSanitizeRequest({ body: bodySchemas.compatibilityReport }),
+    async (req, res) => {
     try {
       const { tools } = req.body;
-      
-      if (!Array.isArray(tools) || tools.length < 2) {
-        return res.status(400).json({ 
-          success: false,
-          error: "Please provide at least 2 tool names" 
-        });
-      }
 
       // Find tool IDs from names
       const allTools = await storage.getToolsWithCategory();
@@ -406,14 +523,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/compatibility-matrix", cacheMiddleware(300), async (req, res) => {
-    try {
-      const matrix = await storage.getCompatibilityMatrix();
-      res.json(matrix);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch compatibility matrix" });
+  app.get("/api/compatibility-matrix", 
+    cacheMiddleware(300),
+    compressionMiddleware({ threshold: 4096, preferBrotli: true }),
+    paginationMiddleware(100, 1000),
+    paginationHelpers(),
+    async (req, res) => {
+      try {
+        const startTime = Date.now();
+        const matrix = await storage.getCompatibilityMatrix();
+        
+        // Apply pagination if requested
+        const pagination = (req as any).pagination;
+        if (pagination) {
+          const startIndex = pagination.offset;
+          const endIndex = startIndex + pagination.limit;
+          const paginatedMatrix = matrix.slice(startIndex, endIndex);
+          
+          return (res as any).paginate(paginatedMatrix, matrix.length);
+        }
+        
+        // Optimize response for large compatibility matrix
+        const optimizedResponse = ResponseOptimizer.createOptimizedResponse(matrix, {
+          message: 'Compatibility matrix retrieved successfully',
+          meta: ResponseOptimizer.addPerformanceMetadata(startTime, {
+            matrixSize: matrix.length,
+            compressed: matrix.length > 500
+          }),
+          serializationOptions: {
+            excludeFields: matrix.length > 500 ? ['notes', 'setupSteps'] : [],
+            numberPrecision: 1
+          }
+        });
+        
+        res.json(optimizedResponse);
+      } catch (error) {
+        res.status(500).json({ message: "Failed to fetch compatibility matrix" });
+      }
     }
-  });
+  );
 
   app.get("/api/compatibility/:toolOneId/:toolTwoId", async (req, res) => {
     try {
@@ -438,18 +586,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/compatibilities/:id", async (req, res) => {
-    try {
-      const compatibilityData = insertCompatibilitySchema.partial().parse(req.body);
-      const compatibility = await storage.updateCompatibility(req.params.id, compatibilityData);
-      if (!compatibility) {
-        return res.status(404).json({ message: "Compatibility not found" });
-      }
-      res.json(compatibility);
-    } catch (error) {
-      res.status(400).json({ message: "Invalid compatibility data" });
-    }
-  });
+  app.put("/api/compatibilities/:id", 
+    rateLimiters.strict,
+    validateAndSanitizeRequest({ 
+      params: paramSchemas.compatibilityId, 
+      body: bodySchemas.updateCompatibility 
+    }),
+    auditMiddleware('UPDATE', 'compatibility', { 
+      captureBody: true, 
+      captureResponse: true, 
+      resourceIdFromParams: 'id' 
+    }),
+    asyncHandler(async (req, res) => {
+      const compatibility = await withDatabaseErrorHandling(
+        () => storage.updateCompatibility(req.params.id, req.body),
+        'update compatibility'
+      );
+      throwNotFoundIf(!compatibility, 'Compatibility', req.params.id);
+      
+      // Invalidate compatibility matrix cache
+      invalidateCache("/api/compatibility-matrix");
+      
+      logger.info(`Compatibility updated successfully: ${req.params.id}`, { 
+        compatibilityId: req.params.id 
+      }, req.requestId);
+      sendSuccess(res, compatibility, 'Compatibility updated successfully');
+    })
+  );
 
   app.delete("/api/compatibilities/:id", async (req, res) => {
     try {
@@ -539,15 +702,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Bulk Compatibility Check - check compatibility for multiple tool pairs
-  app.post("/api/stack/bulk-compatibility", async (req, res) => {
+  app.post("/api/stack/bulk-compatibility", 
+    compressionMiddleware({ threshold: 2048, preferBrotli: true }),
+    async (req, res) => {
     try {
+      const startTime = Date.now();
       const { toolIds } = req.body;
       if (!Array.isArray(toolIds) || toolIds.length < 2) {
         return res.status(400).json({ message: "toolIds must contain at least 2 tools" });
       }
       
       const matrix = await storage.getBulkCompatibility(toolIds);
-      res.json(matrix);
+      
+      // Optimize response for bulk compatibility data
+      const optimizedResponse = ResponseOptimizer.createOptimizedResponse(matrix, {
+        message: 'Bulk compatibility check completed',
+        meta: ResponseOptimizer.addPerformanceMetadata(startTime, {
+          toolCount: toolIds.length,
+          pairCount: matrix.length,
+          compressed: matrix.length > 20
+        }),
+        serializationOptions: {
+          numberPrecision: 1,
+          excludeFields: matrix.length > 50 ? ['notes'] : []
+        }
+      });
+      
+      res.json(optimizedResponse);
     } catch (error) {
       res.status(500).json({ message: "Failed to check bulk compatibility" });
     }
@@ -767,9 +948,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // Search tools with filters
-  app.get("/api/v1/tools/search", async (req, res) => {
+  // Search tools with filters - Enhanced with optimization
+  app.get("/api/v1/tools/search", 
+    rateLimiters.search,
+    compressionMiddleware({ threshold: 512, preferBrotli: true }),
+    paginationMiddleware(20, 100),
+    paginationHelpers(),
+    validateAndSanitizeRequest({ query: querySchemas.toolSearch }),
+    async (req, res) => {
     try {
+      const startTime = performance.now();
       const {
         query,
         q,
@@ -779,69 +967,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         min_popularity,
         min_maturity,
         hasFreeTier,
+        hasIntegrations,
         frameworks,
         languages,
+        sortBy,
         limit = 20,
         summary
       } = req.query as Record<string, any>;
 
-      const searchTerm = (query || q)?.toString().toLowerCase();
-      const frameworksList = (frameworks ? frameworks.toString().split(",") : []).map((s: string) => s.trim().toLowerCase()).filter(Boolean);
-      const languagesList = (languages ? languages.toString().split(",") : []).map((s: string) => s.trim().toLowerCase()).filter(Boolean);
-      const minPop = parseFloat((minPopularity || min_popularity || "").toString());
-      const minMat = parseFloat((minMaturity || min_maturity || "").toString());
-      const limitNum = parseInt(limit.toString(), 10);
+      // Import search optimizer
+      const { searchOptimizer } = await import('./services/search-optimizer');
+
+      // Parse parameters
+      const searchOptions = {
+        query: (query || q)?.toString(),
+        category: category?.toString(),
+        minPopularity: parseFloat((minPopularity || min_popularity || "0").toString()) || undefined,
+        minMaturity: parseFloat((minMaturity || min_maturity || "0").toString()) || undefined,
+        hasFreeTier: (hasFreeTier || "").toString() === "true",
+        hasIntegrations: (hasIntegrations || "").toString() === "true",
+        frameworks: frameworks ? frameworks.toString().split(",").map((s: string) => s.trim()).filter(Boolean) : undefined,
+        languages: languages ? languages.toString().split(",").map((s: string) => s.trim()).filter(Boolean) : undefined,
+        sortBy: sortBy?.toString() as 'popularity' | 'maturity' | 'name' | 'recent' || 'popularity',
+        limit: parseInt(limit.toString(), 10),
+        offset: (req as any).pagination?.offset || 0,
+      };
+
+      // Perform optimized search
+      const searchResult = await searchOptimizer.searchTools(searchOptions);
+      
       const wantSummary = (summary || "").toString().toLowerCase() === "true";
-
-      let tools = await storage.getToolsWithCategory();
-
-      // Text search
-      if (searchTerm) {
-        tools = tools.filter((t: any) =>
-          t.name?.toLowerCase().includes(searchTerm) ||
-          t.description?.toLowerCase().includes(searchTerm) ||
-          (Array.isArray(t.features) && t.features.some((f: string) => f.toLowerCase().includes(searchTerm)))
-        );
-      }
-
-      // Category filter (accept exact or case-insensitive match on name)
-      if (category) {
-        const cat = category.toString().toLowerCase();
-        tools = tools.filter((t: any) => t.category?.name?.toLowerCase() === cat || t.category?.name?.toLowerCase().includes(cat));
-      }
-
-      // Score filters (support snake_case and camelCase)
-      if (!isNaN(minPop)) {
-        tools = tools.filter((t: any) => t.popularityScore >= minPop);
-      }
-      if (!isNaN(minMat)) {
-        tools = tools.filter((t: any) => t.maturityScore >= minMat);
-      }
-
-      // Free tier filter
-      if ((hasFreeTier || "").toString() === "true") {
-        tools = tools.filter((t: any) => t.pricing?.toLowerCase().includes("free"));
-      }
-
-      // Framework filters (any match, case-insensitive substring)
-      if (frameworksList.length > 0) {
-        tools = tools.filter((t: any) => Array.isArray(t.frameworks) && frameworksList.some((f: string) =>
-          t.frameworks.some((tf: string) => tf.toLowerCase().includes(f))
-        ));
-      }
-
-      // Language filters
-      if (languagesList.length > 0) {
-        tools = tools.filter((t: any) => Array.isArray(t.languages) && languagesList.some((l: string) =>
-          t.languages.some((tl: string) => tl.toLowerCase().includes(l))
-        ));
-      }
-
-      // Sort by combined popularity + maturity
-      tools = tools.sort((a: any, b: any) => (b.popularityScore + b.maturityScore) - (a.popularityScore + a.maturityScore));
-
-      const limited = tools.slice(0, limitNum);
-
+      
       const summarize = (t: any) => ({
         id: t.id,
         name: t.name,
@@ -852,13 +1008,114 @@ export async function registerRoutes(app: Express): Promise<Server> {
         popularityScore: t.popularityScore
       });
 
+      let finalResults = wantSummary ? searchResult.tools.map(summarize) : searchResult.tools;
+      
+      // Apply pagination if requested
+      const pagination = (req as any).pagination;
+      if (pagination) {
+        return (res as any).paginate(finalResults, searchResult.totalCount);
+      }
+
+      // Optimize response for search results
+      const optimizedResponse = ResponseOptimizer.createOptimizedResponse({
+        results: finalResults,
+        count: finalResults.length,
+        filters: { 
+          query: searchTerm, 
+          category, 
+          minPopularity: minPop, 
+          minMaturity: minMat, 
+          hasFreeTier, 
+          frameworks: frameworksList, 
+          languages: languagesList, 
+          summary: wantSummary 
+        }
+      }, {
+        message: 'Search completed successfully',
+        serializationOptions: {
+          numberPrecision: 1,
+          excludeFields: wantSummary ? ['integrations', 'performanceImpact'] : []
+        }
+      });
+
       res.json({
-        results: wantSummary ? limited.map(summarize) : limited,
-        count: limited.length,
-        filters: { query: searchTerm, category, minPopularity: minPop, minMaturity: minMat, hasFreeTier, frameworks: frameworksList, languages: languagesList, summary: wantSummary }
+        success: true,
+        data: finalResults,
+        totalCount: searchResult.totalCount,
+        searchTime: searchResult.searchTime,
+        cached: searchResult.cached,
+        appliedFilters: searchResult.appliedFilters,
+        message: `Found ${searchResult.totalCount} tools`,
+        meta: ResponseOptimizer.addPerformanceMetadata(startTime, {
+          searchOptimized: true,
+          cacheHit: searchResult.cached,
+          filterCount: searchResult.appliedFilters.length,
+        }),
       });
     } catch (error) {
-      res.status(500).json({ message: "Failed to search tools" });
+      console.error("Search error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to search tools",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
+  // Search suggestions endpoint for autocomplete
+  app.get("/api/v1/tools/suggestions", 
+    rateLimiters.search,
+    validateAndSanitizeRequest({ query: z.object({ q: z.string().min(1).max(50) }) }),
+    async (req, res) => {
+    try {
+      const { q } = req.query as { q: string };
+      
+      // Import search optimizer
+      const { searchOptimizer } = await import('./services/search-optimizer');
+      
+      const suggestions = await searchOptimizer.getSearchSuggestions(q, 8);
+      
+      res.json({
+        success: true,
+        data: suggestions,
+        query: q,
+        message: `Found ${suggestions.length} suggestions`
+      });
+    } catch (error) {
+      console.error("Suggestions error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to get suggestions",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
+  // Search analytics endpoint
+  app.get("/api/v1/tools/search/analytics", 
+    rateLimiters.search,
+    async (req, res) => {
+    try {
+      // Import search optimizer
+      const { searchOptimizer } = await import('./services/search-optimizer');
+      
+      const analytics = {
+        popularTerms: searchOptimizer.getPopularSearchTerms(10),
+        cacheStats: searchOptimizer.getCacheStats(),
+      };
+      
+      res.json({
+        success: true,
+        data: analytics,
+        message: "Search analytics retrieved successfully"
+      });
+    } catch (error) {
+      console.error("Analytics error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to get search analytics",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
   
@@ -1032,6 +1289,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ categories: categories.map((c) => c.name) });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch categories" });
+    }
+  });
+
+  // Streaming endpoint for very large datasets
+  app.get("/api/tools/stream", 
+    compressionMiddleware({ threshold: 0, preferBrotli: true }),
+    async (req, res) => {
+    try {
+      const tools = await storage.getToolsWithAllCategories();
+      
+      // Use streaming for large responses
+      if (tools.length > 1000) {
+        ResponseOptimizer.streamResponse(res, tools, 100);
+      } else {
+        const optimizedResponse = ResponseOptimizer.createOptimizedResponse(tools, {
+          message: 'Tools streamed successfully',
+          serializationOptions: {
+            excludeFields: ['notes', 'performanceImpact'],
+            numberPrecision: 1
+          }
+        });
+        res.json(optimizedResponse);
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to stream tools" });
+    }
+  });
+
+  // API optimization statistics endpoint
+  app.get("/api/optimization/stats", 
+    compressionHeaders(),
+    async (req, res) => {
+    try {
+      const tools = await storage.getToolsWithAllCategories();
+      const sampleData = JSON.stringify(tools.slice(0, 10));
+      
+      // Calculate compression ratios
+      const gzipRatio = await estimateCompressionRatio(sampleData, 'gzip');
+      const brotliRatio = await estimateCompressionRatio(sampleData, 'brotli');
+      
+      const stats = {
+        datasetSize: tools.length,
+        sampleSize: sampleData.length,
+        compressionRatios: {
+          gzip: Math.round((1 - gzipRatio) * 100) + '%',
+          brotli: Math.round((1 - brotliRatio) * 100) + '%'
+        },
+        optimizations: {
+          indexesApplied: true,
+          compressionEnabled: true,
+          paginationAvailable: true,
+          responseOptimization: true
+        },
+        recommendations: [
+          'Use pagination for large datasets',
+          'Enable compression for responses > 1KB',
+          'Use summary mode for mobile clients',
+          'Consider streaming for datasets > 1000 items'
+        ]
+      };
+      
+      res.json({
+        success: true,
+        data: stats,
+        message: 'API optimization statistics retrieved'
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get optimization stats" });
     }
   });
 
@@ -1246,6 +1571,238 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to fetch paginated tools" });
     }
   });
+
+  // ===== SECURITY AND MONITORING ENDPOINTS =====
+  
+  // Get audit logs (admin only)
+  app.get("/api/admin/audit-logs", 
+    rateLimiters.sensitive,
+    validateAndSanitizeRequest({ query: querySchemas.pagination }),
+    asyncHandler(async (req: Request, res: Response) => {
+      const { getAuditLogs } = await import('./middleware/audit');
+      
+      const { page = 1, limit = 50 } = req.query as any;
+      const offset = (page - 1) * limit;
+      
+      const { logs, total } = getAuditLogs({
+        limit,
+        offset
+      });
+      
+      res.json({
+        success: true,
+        data: logs,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        }
+      });
+    })
+  );
+  
+  // Export audit logs (admin only)
+  app.get("/api/admin/audit-logs/export", 
+    rateLimiters.sensitive,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { exportAuditLogs } = await import('./middleware/audit');
+      const format = req.query.format as 'json' | 'csv' || 'json';
+      
+      const exportData = exportAuditLogs(format);
+      
+      if (format === 'csv') {
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename=audit-logs.csv');
+      } else {
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', 'attachment; filename=audit-logs.json');
+      }
+      
+      res.send(exportData);
+    })
+  );
+  
+  // Get rate limit status
+  app.get("/api/admin/rate-limit-status", 
+    rateLimiters.general,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { getRateLimitStatus } = await import('./middleware/rate-limiting');
+      
+      const status = await getRateLimitStatus(req);
+      
+      res.json({
+        success: true,
+        data: status
+      });
+    })
+  );
+  
+
+
+  // ===== PERFORMANCE MONITORING ENDPOINTS =====
+  
+  // Get performance metrics
+  app.get("/api/metrics", 
+    rateLimiters.moderate,
+    asyncHandler(async (req, res) => {
+      const metrics = getMetricsData();
+      sendSuccess(res, metrics, 'Performance metrics retrieved successfully');
+    })
+  );
+
+
+
+  // Get aggregated performance metrics
+  app.get("/api/metrics/performance", 
+    rateLimiters.moderate,
+    asyncHandler(async (req, res) => {
+      const timeWindow = parseInt(req.query.timeWindow as string) || 300000; // 5 minutes default
+      const metrics = getMetricsData();
+      sendSuccess(res, {
+        performance: metrics.performance,
+        aggregated: metrics.aggregated,
+        timeWindow: timeWindow / 1000
+      }, 'Performance metrics retrieved successfully');
+    })
+  );
+
+  // Get database performance metrics
+  app.get("/api/metrics/database", 
+    rateLimiters.moderate,
+    asyncHandler(async (req, res) => {
+      const metrics = getMetricsData();
+      sendSuccess(res, {
+        database: metrics.database,
+        summary: {
+          totalQueries: metrics.database.length,
+          averageDuration: metrics.database.length > 0 
+            ? metrics.database.reduce((sum, m) => sum + m.duration, 0) / metrics.database.length 
+            : 0,
+          slowQueries: metrics.database.filter(m => m.duration > 100).length,
+          failedQueries: metrics.database.filter(m => !m.success).length
+        }
+      }, 'Database metrics retrieved successfully');
+    })
+  );
+
+  // Get system metrics
+  app.get("/api/metrics/system", 
+    rateLimiters.moderate,
+    asyncHandler(async (req, res) => {
+      const metrics = getMetricsData();
+      sendSuccess(res, {
+        system: metrics.system,
+        latest: metrics.system[metrics.system.length - 1] || null
+      }, 'System metrics retrieved successfully');
+    })
+  );
+
+  // ===== ANALYTICS AND USER TRACKING ENDPOINTS =====
+  
+  // Get analytics data
+  app.get("/api/analytics", 
+    rateLimiters.moderate,
+    asyncHandler(async (req, res) => {
+      const analytics = getAnalyticsData();
+      sendSuccess(res, analytics, 'Analytics data retrieved successfully');
+    })
+  );
+
+  // Get usage insights
+  app.get("/api/analytics/insights", 
+    rateLimiters.moderate,
+    asyncHandler(async (req, res) => {
+      const analytics = getAnalyticsData();
+      sendSuccess(res, analytics.insights, 'Usage insights retrieved successfully');
+    })
+  );
+
+  // Get analytics dashboard data
+  app.get("/api/analytics/dashboard", 
+    rateLimiters.moderate,
+    asyncHandler(async (req, res) => {
+      const analytics = getAnalyticsData();
+      const dashboardData = {
+        overview: {
+          totalUsers: analytics.insights.totalUsers,
+          activeUsers: analytics.insights.activeUsers,
+          totalSessions: analytics.insights.totalSessions,
+          averageSessionDuration: analytics.insights.averageSessionDuration
+        },
+        activity: {
+          recentEvents: analytics.events.slice(-50),
+          topFeatures: analytics.insights.topFeatures,
+          topTools: analytics.insights.topTools
+        },
+        performance: {
+          aggregated: analytics.aggregated,
+          errorRate: analytics.aggregated.errorRate,
+          averageDuration: analytics.aggregated.averageDuration
+        },
+        feedback: analytics.insights.userFeedbackSummary,
+        search: {
+          topSearchTerms: analytics.insights.searchTerms
+        }
+      };
+      sendSuccess(res, dashboardData, 'Analytics dashboard data retrieved successfully');
+    })
+  );
+
+  // Submit user feedback
+  app.post("/api/feedback", 
+    rateLimiters.moderate,
+    validateAndSanitizeRequest({ body: bodySchemas.userFeedback }),
+    asyncHandler(async (req, res) => {
+      const { type, message, rating, metadata } = req.body;
+      
+      const feedback = submitUserFeedback(type, message, rating, metadata, req);
+      
+      logger.info(`User feedback submitted: ${type}`, { 
+        feedbackId: feedback.id,
+        rating: feedback.rating 
+      }, req.requestId);
+      
+      sendSuccess(res, { feedbackId: feedback.id }, 'Feedback submitted successfully', 201);
+    })
+  );
+
+  // Track user interaction
+  app.post("/api/analytics/interaction", 
+    rateLimiters.lenient,
+    validateAndSanitizeRequest({ body: bodySchemas.userInteraction }),
+    asyncHandler(async (req, res) => {
+      const { action, target, metadata } = req.body;
+      
+      trackUserInteraction(action, target, metadata, req);
+      
+      sendSuccess(res, { tracked: true }, 'Interaction tracked successfully');
+    })
+  );
+
+  // Get user feedback
+  app.get("/api/feedback", 
+    rateLimiters.moderate,
+    asyncHandler(async (req, res) => {
+      const analytics = getAnalyticsData();
+      const limit = parseInt(req.query.limit as string) || 100;
+      const type = req.query.type as string;
+      
+      let feedback = analytics.feedback.slice(-limit);
+      
+      if (type) {
+        feedback = feedback.filter(f => f.type === type);
+      }
+      
+      sendSuccess(res, {
+        feedback,
+        summary: analytics.insights.userFeedbackSummary
+      }, 'User feedback retrieved successfully');
+    })
+  );
+
+  // Register debug and health check routes
+  registerDebugRoutes(app);
 
   const httpServer = createServer(app);
   return httpServer;

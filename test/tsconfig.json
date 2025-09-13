@@ -1,0 +1,17 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["vitest/globals", "@testing-library/jest-dom", "node"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
+  },
+  "include": [
+    "./**/*",
+    "../client/src/**/*.test.*",
+    "../client/src/**/*.spec.*",
+    "../server/**/*.test.*",
+    "../server/**/*.spec.*",
+    "../shared/**/*.test.*",
+    "../shared/**/*.spec.*"
+  ]
+}

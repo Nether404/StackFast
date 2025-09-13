@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { ComponentErrorBoundary } from "@/components/error-boundaries";
 import type { ToolWithCategory } from "@shared/schema";
 
 interface ToolCardProps {
@@ -11,7 +12,7 @@ interface ToolCardProps {
   onViewDetails: (tool: ToolWithCategory) => void;
 }
 
-export function ToolCard({ tool, onEdit, onViewDetails }: ToolCardProps) {
+function ToolCardContent({ tool, onEdit, onViewDetails }: ToolCardProps) {
   const getCategoryColor = (categoryName: string) => {
     switch (categoryName.toLowerCase()) {
       case "ai coding tools":
@@ -107,7 +108,7 @@ export function ToolCard({ tool, onEdit, onViewDetails }: ToolCardProps) {
                 size="sm"
                 onClick={(e) => {
                   e.stopPropagation();
-                  window.open(tool.url, '_blank');
+                  if (tool.url) window.open(tool.url, '_blank');
                 }}
                 data-testid={`button-external-link-${tool.id}`}
               >
@@ -145,7 +146,7 @@ export function ToolCard({ tool, onEdit, onViewDetails }: ToolCardProps) {
         
         <div className="mt-4">
           <div className="flex flex-wrap gap-1">
-            {tool.frameworks.slice(0, 3).map((framework, index) => (
+            {tool.frameworks?.slice(0, 3).map((framework, index) => (
               <Badge 
                 key={index} 
                 variant="secondary" 
@@ -155,7 +156,7 @@ export function ToolCard({ tool, onEdit, onViewDetails }: ToolCardProps) {
                 {framework}
               </Badge>
             ))}
-            {tool.frameworks.length > 3 && (
+            {tool.frameworks && tool.frameworks.length > 3 && (
               <Badge 
                 variant="secondary" 
                 className="text-xs bg-github-dark text-github-text-secondary"
@@ -177,5 +178,25 @@ export function ToolCard({ tool, onEdit, onViewDetails }: ToolCardProps) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+export function ToolCard(props: ToolCardProps) {
+  return (
+    <ComponentErrorBoundary 
+      componentName="Tool Card"
+      fallbackComponent={
+        <Card className="bg-github-surface border-github-border">
+          <CardContent className="p-6 text-center">
+            <div className="text-github-text-secondary">
+              <p className="text-sm">Tool card unavailable</p>
+              <p className="text-xs mt-1">Tool: {props.tool?.name || 'Unknown'}</p>
+            </div>
+          </CardContent>
+        </Card>
+      }
+    >
+      <ToolCardContent {...props} />
+    </ComponentErrorBoundary>
   );
 }

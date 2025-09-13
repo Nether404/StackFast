@@ -32,7 +32,7 @@ export function CompatibilityInsights({ tools, compatibilityMatrix }: Compatibil
 
   // Calculate compatibility statistics
   const stats = useMemo(() => {
-    const scores = compatibilityMatrix.map(c => c.compatibilityScore);
+    const scores = compatibilityMatrix.map(c => c.compatibility.compatibilityScore);
     const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
     const highCompatibility = scores.filter(s => s >= 90).length;
     const mediumCompatibility = scores.filter(s => s >= 70 && s < 90).length;
@@ -60,7 +60,7 @@ export function CompatibilityInsights({ tools, compatibilityMatrix }: Compatibil
       );
       
       if (compatibilities.length > 0) {
-        const scores = compatibilities.map(c => c.compatibilityScore);
+        const scores = compatibilities.map(c => c.compatibility.compatibilityScore);
         const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
         const highScores = scores.filter(s => s >= 85).length;
         
@@ -87,16 +87,16 @@ export function CompatibilityInsights({ tools, compatibilityMatrix }: Compatibil
   // Find best tool pairs
   const bestPairs = useMemo(() => {
     return compatibilityMatrix
-      .filter(c => c.compatibilityScore >= 85)
-      .sort((a, b) => b.compatibilityScore - a.compatibilityScore)
+      .filter(c => c.compatibility.compatibilityScore >= 85)
+      .sort((a, b) => b.compatibility.compatibilityScore - a.compatibility.compatibilityScore)
       .slice(0, 10);
   }, [compatibilityMatrix]);
 
   // Find problematic pairs
   const problematicPairs = useMemo(() => {
     return compatibilityMatrix
-      .filter(c => c.compatibilityScore < 50)
-      .sort((a, b) => a.compatibilityScore - b.compatibilityScore)
+      .filter(c => c.compatibility.compatibilityScore < 50)
+      .sort((a, b) => a.compatibility.compatibilityScore - b.compatibility.compatibilityScore)
       .slice(0, 5);
   }, [compatibilityMatrix]);
 
@@ -111,7 +111,7 @@ export function CompatibilityInsights({ tools, compatibilityMatrix }: Compatibil
       
       const existing = categoryPairs.get(finalKey) || { avgScore: 0, count: 0 };
       categoryPairs.set(finalKey, {
-        avgScore: (existing.avgScore * existing.count + c.compatibilityScore) / (existing.count + 1),
+        avgScore: (existing.avgScore * existing.count + c.compatibility.compatibilityScore) / (existing.count + 1),
         count: existing.count + 1
       });
     });
@@ -327,7 +327,7 @@ export function CompatibilityInsights({ tools, compatibilityMatrix }: Compatibil
                       </div>
                     </div>
                     <Badge className="bg-green-600/20 text-green-400 border-green-600/30">
-                      {pair.compatibilityScore}% compatible
+                      {pair.compatibility.compatibilityScore}% compatible
                     </Badge>
                   </div>
                 ))}
@@ -398,7 +398,7 @@ export function CompatibilityInsights({ tools, compatibilityMatrix }: Compatibil
                       </div>
                     </div>
                     <Badge variant="destructive">
-                      {pair.compatibilityScore}% compatible
+                      {pair.compatibility.compatibilityScore}% compatible
                     </Badge>
                   </div>
                 ))}
