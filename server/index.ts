@@ -102,23 +102,24 @@ app.use((req, res, next) => {
 (async () => {
 	const server = await registerRoutes(app);
 
-	// Add 404 handler for unmatched routes
-	app.use(notFoundHandler);
-
-	// Add centralized error handling middleware
-	app.use(errorHandler);
-
 	// Detect build presence (dist/public) to decide serving mode
 	const __dirname = path.dirname(fileURLToPath(import.meta.url));
 	const builtPublic = path.resolve(__dirname, "..", "dist", "public");
 	const hasBuild = fs.existsSync(builtPublic);
 	const nodeEnv = process.env.NODE_ENV || (hasBuild ? "production" : "development");
 
+	// Set up frontend serving BEFORE 404 handler
 	if (nodeEnv === "development") {
 		await setupVite(app, server);
 	} else {
 		serveStatic(app);
 	}
+
+	// Add 404 handler for unmatched routes (after Vite setup)
+	app.use(notFoundHandler);
+
+	// Add centralized error handling middleware
+	app.use(errorHandler);
 
 	const port = Number.parseInt(process.env.PORT || "5000", 10);
 	const listenOptions: any = {

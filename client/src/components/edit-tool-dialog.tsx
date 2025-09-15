@@ -26,27 +26,29 @@ interface EditToolDialogProps {
 export function EditToolDialog({ open, onOpenChange, tool }: EditToolDialogProps) {
   const { toast } = useToast();
   const [formData, setFormData] = useState({
-    name: tool.name,
-    description: tool.description || "",
-    categoryId: tool.categoryId,
-    url: tool.url || "",
-    pricing: tool.pricing || "",
-    notes: tool.notes || "",
-    popularityScore: tool.popularityScore,
-    maturityScore: tool.maturityScore,
+    name: tool?.name || "",
+    description: tool?.description || "",
+    categoryId: tool?.categoryId || "",
+    url: tool?.url || "",
+    pricing: tool?.pricing || "",
+    notes: tool?.notes || "",
+    popularityScore: tool?.popularityScore || 0,
+    maturityScore: tool?.maturityScore || 0,
   });
 
   useEffect(() => {
-    setFormData({
-      name: tool.name,
-      description: tool.description || "",
-      categoryId: tool.categoryId,
-      url: tool.url || "",
-      pricing: tool.pricing || "",
-      notes: tool.notes || "",
-      popularityScore: tool.popularityScore,
-      maturityScore: tool.maturityScore,
-    });
+    if (tool) {
+      setFormData({
+        name: tool.name || "",
+        description: tool.description || "",
+        categoryId: tool.categoryId || "",
+        url: tool.url || "",
+        pricing: tool.pricing || "",
+        notes: tool.notes || "",
+        popularityScore: tool.popularityScore || 0,
+        maturityScore: tool.maturityScore || 0,
+      });
+    }
   }, [tool]);
 
   const { data: categories = [] } = useQuery({
@@ -55,6 +57,7 @@ export function EditToolDialog({ open, onOpenChange, tool }: EditToolDialogProps
 
   const updateTool = useMutation({
     mutationFn: async (data: typeof formData) => {
+      if (!tool?.id) throw new Error("Tool ID is required");
       return apiRequest(`/api/tools/${tool.id}`, "PUT", {
         ...data,
       });
@@ -89,6 +92,10 @@ export function EditToolDialog({ open, onOpenChange, tool }: EditToolDialogProps
     }
     updateTool.mutate(formData);
   };
+
+  if (!tool) {
+    return null;
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

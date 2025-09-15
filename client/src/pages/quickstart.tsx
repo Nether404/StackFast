@@ -9,7 +9,7 @@ export default function QuickStartPage() {
 
   const seedMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/tools/seed");
+      const res = await apiRequest("/api/tools/seed", "POST");
       return await res.json();
     },
     onSuccess: () => {
@@ -19,7 +19,7 @@ export default function QuickStartPage() {
 
   const importCsvMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/tools/import-csv");
+      const res = await apiRequest("/api/tools/import-csv", "POST");
       return await res.json();
     },
     onSuccess: () => {
@@ -29,7 +29,7 @@ export default function QuickStartPage() {
 
   const genCompatMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/tools/generate-compatibility");
+      const res = await apiRequest("/api/tools/generate-compatibility", "POST");
       return await res.json();
     },
   });

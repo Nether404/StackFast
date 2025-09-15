@@ -58,7 +58,7 @@ export default function ToolDatabasePage({ searchQuery, categoryFilter }: ToolDa
   // Clear all tools mutation
   const clearAllMutation = useMutation({
     mutationFn: async () => {
-      return apiRequest("DELETE", "/api/tools");
+      return apiRequest("/api/tools", "DELETE");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tools"] });
@@ -81,7 +81,7 @@ export default function ToolDatabasePage({ searchQuery, categoryFilter }: ToolDa
   // Import CSV mutation
   const importCSVMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest("POST", "/api/tools/import-csv");
+      const response = await apiRequest("/api/tools/import-csv", "POST");
       const data = await response.json();
       return data;
     },
@@ -106,7 +106,7 @@ export default function ToolDatabasePage({ searchQuery, categoryFilter }: ToolDa
   // Delete individual tool mutation
   const deleteToolMutation = useMutation({
     mutationFn: async (toolId: string) => {
-      return apiRequest("DELETE", `/api/tools/${toolId}`);
+      return apiRequest(`/api/tools/${toolId}`, "DELETE");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tools"] });
